@@ -1,18 +1,35 @@
 package yun.app.minesweeper;
 
+import android.os.AsyncTask;
 import android.support.v7.app.ActionBarActivity;
 import android.os.Bundle;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.SurfaceView;
+import android.view.ViewGroup;
+import android.widget.RelativeLayout;
+import android.widget.TextView;
 
 
 public class MainActivity extends ActionBarActivity {
 
+    TextView tv_info;
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(new GameMain(this,100,200));
+        setContentView(R.layout.activity_main);
+        RelativeLayout rl = (RelativeLayout)findViewById(R.id.main_surfaceview);
+        tv_info = (TextView)findViewById(R.id.info_textview);
+        GameBackTask gameBackTask = new GameBackTask(tv_info);
+        SurfaceView sv = new GameMain(this,10,10,gameBackTask);
+        gameBackTask.execute();
+        sv.setLayoutParams(new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        rl.addView(sv);
 
+
+    }
+    public void setInfo(String txt){
+        tv_info.setText(txt);
     }
 
     @Override

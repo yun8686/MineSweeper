@@ -1,22 +1,22 @@
 package yun.app.minesweeper;
 
+import android.app.Activity;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PointF;
+import android.os.AsyncTask;
 import android.util.Log;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import android.view.View;
+import android.widget.TextView;
 
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Random;
 
 /**
@@ -26,8 +26,9 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
     final float VIEW_WIDTH = 800;
     final float VIEW_HEIGHT = 800;
     float scale;
-    float move_x=100,move_y;
+    float move_x,move_y;
 
+    public int allBombNum;
     private int drag_x,drag_y;
     Thread thread;
     boolean threadIsRunning;
@@ -36,11 +37,13 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
     public int SIZE_Y;
     public int SIZE_BLOCK = 100;
     Mass[][] board;
-    Context context;
+    MainActivity context;
+    GameBackTask gameBackTask;
     SurfaceHolder surfaceHolder;
-    GameMain(Context context,int size_x,int size_y){
+    GameMain(MainActivity context,int size_x,int size_y,GameBackTask gameBackTask){
         super(context);
         this.context = context;
+        this.gameBackTask = gameBackTask;
         surfaceHolder = getHolder();
         surfaceHolder.addCallback(this);
 
@@ -53,7 +56,7 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
             for(int j=0;j<SIZE_Y;j++){
                 board[i][j] = new Mass();
                 if(rnd.nextInt(10)==0){
-                    board[i][j].isBomb = true;
+                    board[i][j].setBomb(true);
                 }
             }
         }
@@ -74,7 +77,7 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
                         mass.addAround(board[i][j]);
                     }
                 }catch(ArrayIndexOutOfBoundsException e){
-                    Log.e("範囲外","は無視する");
+                    //Log.e("範囲外","は無視する");
                 }
             }
         }
@@ -83,15 +86,11 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         scale = Math.min(getWidth() / VIEW_WIDTH, getHeight() / VIEW_HEIGHT);
-        Log.e("SCALE", "" + scale);
         //スレッドスタート
         thread = new Thread(this);
         thread.start();
         threadIsRunning = true;
 
-//        Matrix matrix = new Matrix();
-  //      img_close.setHeight(50);
-    //    img_close.setWidth(50);
     }
 
     @Override
@@ -101,6 +100,7 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+        gameBackTask.isEnd = false;
         threadIsRunning = false;
     }
 
@@ -130,19 +130,28 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
             Bitmap.createScaledBitmap(BitmapFactory.decodeResource(res, R.drawable.open7), SIZE_BLOCK, SIZE_BLOCK, true),
             Bitmap.createScaledBitmap(BitmapFactory.decodeResource(res, R.drawable.open8), SIZE_BLOCK, SIZE_BLOCK, true)};
     Bitmap img_bomb = Bitmap.createScaledBitmap(BitmapFactory.decodeResource(res, R.drawable.bomb),SIZE_BLOCK,SIZE_BLOCK,true);
+    Bitmap img_flag = Bitmap.createScaledBitmap(BitmapFactory.decodeResource(res, R.drawable.flag),SIZE_BLOCK,SIZE_BLOCK,true);
     private void draw(){
         // lockCanvas()メソッドを使用して、描画するためのCanvasオブジェクトを取得する
         Canvas canvas = surfaceHolder.lockCanvas();
-        canvas.translate(move_x,move_y);
+        canvas.translate(move_x, move_y);
         canvas.scale(scale, scale); // 端末の画面に合わせて拡大・縮小する
 
         // 画面全体を一色で塗りつぶすdrawColor()メソッドを用いて画面全体を白に指定
         canvas.drawColor(Color.BLUE);
 
 
+
+
         // Paintクラスをインスタンス化
         Paint paint = new Paint();
         paint.setColor(Color.GRAY);
+
+        //スコア情報とかを書く
+        //canvas.drawText("爆弾：" + Mass.allBombNum,-20,-20,paint);
+        gameBackTask.bombCount = Integer.toString(Mass.allBombNum);
+        //allBombNum = Mass.allBombNum;
+
         // Canvas.drawRect()を呼び出すと、正方形や長方形を描画することが可能になる
         // （left：左辺,top：上辺,right：右辺,bottom：下辺,Paintインスタンス）
         for(int i=0;i<SIZE_X;i++){
@@ -157,6 +166,8 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
                         canvas.drawBitmap(img_open[mass.bombCount], x, y, paint);
                         //canvas.drawText(""+mass.bombCount,x,y,paint);
                     }
+                }else if(mass.isFlag){
+                    canvas.drawBitmap(img_flag,x, y, paint);
                 }else{
                     canvas.drawBitmap(img_close, x, y, paint);
                 }
@@ -176,7 +187,8 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
     int TouchMode;
     private static final int TOUCH_NONE = 0;
     private static final int TOUCH_DRAG = 1;
-    private static final int TOUCH_ZOOM = 2;
+    private static final int TOUCH_LONG = 2;    long touchTime; long LONG_TIME=500;
+    private static final int TOUCH_ZOOM = 3;
     @Override
     public boolean onTouchEvent(MotionEvent event) {
 
@@ -197,29 +209,41 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
                     case MotionEvent.ACTION_DOWN:
                         base_x = x;
                         base_y = y;
-
+                        touchTime = System.currentTimeMillis();
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if(TouchMode == TOUCH_DRAG || Math.abs(base_x - x)>10 || Math.abs(base_x - x)>10){
+                            TouchMode = TOUCH_DRAG;
+                            move_x -= base_x - x;
+                            move_y -= base_y - y;
+                            base_x = x;
+                            base_y = y;
+                        }else if(System.currentTimeMillis() - touchTime>LONG_TIME){
+                            int i = (int) ((x - move_x) / (SIZE_BLOCK * scale));
+                            int j = (int) ((y - move_y) / (SIZE_BLOCK * scale));
+                            board[i][j].changeFlag();
+                            TouchMode = TOUCH_DRAG;
+                        }
+                        break;
+                    case MotionEvent.ACTION_UP:
                         int i = (int) ((x - move_x) / (SIZE_BLOCK * scale));
                         int j = (int) ((y - move_y) / (SIZE_BLOCK * scale));
                         try {
-                            //board[i][j].isOpen = true;
-                            board[i][j].open();
+                            if(TouchMode == TOUCH_NONE) {
+                                long time = System.currentTimeMillis() - touchTime;
+                                if(time<LONG_TIME) {
+                                    board[i][j].open();
+                                }else{
+                                    board[i][j].changeFlag();
+                                }
+                            }
                         } catch (Exception e) {
                         }
-                        break;
-                    case MotionEvent.ACTION_MOVE:
-                        move_x -= base_x - x;
-                        move_y -= base_y - y;
-                        base_x = x;
-                        base_y = y;
-                        break;
-                    case MotionEvent.ACTION_UP:
                         TouchMode =TOUCH_NONE;
                         break;
                 }
             }
         }else if(pointerCnt >= 2){
-            Log.e("ERROR","2TOUCH" + event.getAction());
-            Log.e("ACTION_POINTER_DOWN",""+MotionEvent.ACTION_POINTER_DOWN);
             switch (event.getAction() & MotionEvent.ACTION_MASK) {
                 case MotionEvent.ACTION_DOWN:
                 case MotionEvent.ACTION_POINTER_DOWN:
@@ -227,6 +251,8 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
                     if(pinchStartDist> 50f)
                     {
                         getCenterPoint(event, pinchStartPoint);
+                        base_x = pinchStartPoint.x;
+                        base_y = pinchStartPoint.y;
                         baseScale = scale;
                         TouchMode = TOUCH_ZOOM;
                     }
@@ -239,6 +265,14 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
                         getCenterPoint(event, pt);
                         _fPinchScale = getDistance(event) / pinchStartDist;
                         scale = Math.max(0.5f, baseScale*_fPinchScale);
+//                        move_x += (base_x-base_x*scale)/2;
+  //                      move_y += (base_y-base_y*scale)/2;
+                        move_x -= base_x - pt.x;
+                        move_y -= base_y - pt.y;
+                        base_x = pt.x;
+                        base_y = pt.y;
+                        Log.e("BASE",base_x + " " + base_y + ":" + move_x + " " + move_y);
+
                         invalidate();
                     }
                     break;
@@ -263,9 +297,11 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
         pt.y = (event.getY(0) + event.getY(1)) * 0.5f;
     }
 
-    private class Mass{
+    private static class Mass{
+        static int allBombNum;
         public boolean isBomb;
         public boolean isOpen;
+        public boolean isFlag;
 
         public int bombCount = 0;
         public ArrayList<Mass> around = new ArrayList<Mass>();
@@ -275,9 +311,9 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
 
         public void open(){
             synchronized (OpenLocker.lock) {
-                if(this.isOpen)return;
+                if(this.isOpen || this.isFlag)return;
                 this.isOpen = true;
-                if (this.bombCount == 0) {
+                if (this.bombCount == 0 && !isBomb) {
                     ArrayList<Mass> center = new ArrayList<Mass>();
                     center.add(this);
                     while (center.size() > 0) {
@@ -300,9 +336,49 @@ public class GameMain extends SurfaceView implements SurfaceHolder.Callback, Run
                 bombCount++;
             }
         }
+
+        public void setBomb(boolean bomb) {
+            this.isBomb = bomb;
+            if(bomb) {
+                allBombNum++;
+            }
+        }
+
+        public void changeFlag() {
+            isFlag = !isFlag;
+        }
     }
 }
 
 class OpenLocker {  //排他制御
     static Object lock = new Object();
+}
+
+class GameBackTask extends AsyncTask<Void,Void,Void>{
+    TextView tv;
+    public String bombCount;
+    public boolean isEnd;
+    GameBackTask(TextView tv){
+        this.tv = tv;
+
+    }
+    @Override
+    protected Void doInBackground(Void... params) {
+        while(!isEnd) {
+            try {
+                Thread.sleep(1000);
+                publishProgress();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        return null;
+    }
+
+    @Override
+    protected void onProgressUpdate(Void... values) {
+        Log.e("eeR",bombCount);
+        tv.setText(bombCount);
+
+    }
 }
